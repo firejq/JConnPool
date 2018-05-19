@@ -1,12 +1,9 @@
-import net.sf.cglib.proxy.*;
+package com.firejq;
 
 import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.sql.*;
 import java.util.LinkedList;
 import java.util.Properties;
@@ -21,12 +18,14 @@ import java.util.logging.Logger;
 public class JConnPool implements DataSource {
 
 	// database connection list
-	private static LinkedList<Connection> connList = new LinkedList<>();
+	private final static LinkedList<Connection> connList = new LinkedList<>();
 
-	/* default value of connection pool environment parameter */
+	/* default value of connection pool parameter */
 	private final static Integer DEFAULT_INITIAL_POOL_SIZE = 10;
 	private final static Integer DEFAULT_MAX_POOL_SIZE = 50;
 	private final static Integer DEFAULT_MIN_POOL_SIZE = 2;
+	private final static String DEFAULT_USERNAME = "";
+	private final static String DEFAULT_PASSWORD = "";
 	/* end */
 
 	/* connection pool environment parameter */
@@ -59,24 +58,49 @@ public class JConnPool implements DataSource {
 				.getResourceAsStream("db.properties")) {
 			Properties properties = new Properties();
 			properties.load(inputStream);
-			JConnPool.jdbcUrl = properties.getProperty("url");
-			JConnPool.username = properties.getProperty("username");
-			JConnPool.driverClass = properties.getProperty("driver");
-			JConnPool.password = properties.getProperty("password");
+
+			/* Parameter validate */
+			if ((jdbcUrl = properties.getOrDefault(
+					"url", "").toString()).isEmpty()) {
+				throw new RuntimeException("Illegal parameter: url");
+			}
+			if ((driverClass = properties.getOrDefault(
+					"driver", "").toString()).isEmpty()) {
+				throw new RuntimeException("Illegal parameter: driver");
+			}
+			if ((username = properties.getOrDefault(
+					"username", "").toString()).isEmpty()) {
+				username = DEFAULT_USERNAME;
+			}
+			if ((password = properties.getOrDefault(
+					"password", "").toString()).isEmpty()) {
+				password = DEFAULT_PASSWORD;
+			}
+			if (minPoolSize < 0
+					|| initialPoolSize < minPoolSize
+					|| maxPoolSize < initialPoolSize) {
+				throw new RuntimeException("Illegal parameter: pool size");
+			}
+			/* end */
+
 			// 加载驱动
 			Class.forName(driverClass);
-
 			// 获取多个连接，保存在 LinkedList 集合中
-			for (int i = 0; i < JConnPool.initialPoolSize; i++) {
-				JConnPool.connList.add(DriverManager.getConnection(jdbcUrl,
-																   username,
-																   password));
+			for (int i = 0; i < initialPoolSize; i++) {
+				Connection conn = DriverManager.getConnection(jdbcUrl,
+															  username,
+															  password);
+				// 转换为动态代理对象
+				Connection connProxy = ProxyUtil.getProxyConnection(conn,
+																	connList);
+				connList.add(connProxy);
 			}
 			System.out.println("初始化完成，当前连接数：" + connList.size());
 		} catch (IOException | ClassNotFoundException | SQLException e) {
 			e.printStackTrace();
 		}
 	}
+
 
 	/**
 	 * <p>Attempts to establish a connection with the data source that
@@ -93,49 +117,16 @@ public class JConnPool implements DataSource {
 	@Override
 	public Connection getConnection() throws SQLException {
 		System.out.println("调用getConn，连接数：" + connList.size());
-		if (connList.size() > 0) {
-			// get a connection object from the pool
-			Connection connection = connList.removeFirst();
-
-			System.out.println("获取一个连接前，连接数:" + connList.size());
-			// 返回一个动态代理对象
-			return (Connection) Proxy.newProxyInstance(
-					JConnPool.class.getClassLoader(),
-					connection.getClass().getInterfaces(),
-					(proxy, method, args) -> {
-						// 如果不是调用 close 方法，就按照正常的来调用
-						if (!method.getName().equals("close")) {
-							method.invoke(connection, args);
-						} else {
-							connList.add(connection);
-							// 再看看池的大小
-							System.out.println(connList.size());
-						}
-						return null;
-					});
-
-
-//			Enhancer enhancer = new Enhancer();
-//			enhancer.setSuperclass(connection.getClass());
-//			enhancer.setCallbacks(new Callback[] {
-//					(MethodInterceptor) (obj, method, args, proxy) -> {
-//						connList.add((Connection) obj);
-//						System.out.println("close 被拦截, 连接数" + connList.size());
-//						return null;
-//					},
-//					NoOp.INSTANCE
-//			});
-//			enhancer.setCallbackFilter(method -> {
-//				if (method.getName().equals("close")) {
-//					return 0;
-//				} else {
-//					return 1;
-//				}
-//			});
-//			return (Connection) enhancer.create();
-
+		synchronized (connList) {
+			if (connList.size() > 0) {
+				// get a connection object from the pool
+				Connection connection = connList.removeFirst();
+				System.out.println("获取一个连接后，连接数:" + connList.size());
+				// 返回一个动态代理连接对象
+				return connection;
+			}
+			return null;//todo 当连接池为0时，执行扩容/等待操作
 		}
-		return null;
 	}
 
 	/**
@@ -157,7 +148,7 @@ public class JConnPool implements DataSource {
 	@Override
 	public Connection getConnection(String username, String password)
 			throws SQLException {
-		return null;
+		return null;//todo 支持重新设置连接池的用户名和密码
 	}
 
 	/**
@@ -181,7 +172,7 @@ public class JConnPool implements DataSource {
 	 */
 	@Override
 	public <T> T unwrap(Class<T> iface) throws SQLException {
-		return null;
+		return (T)this;
 	}
 
 	/**
@@ -206,7 +197,7 @@ public class JConnPool implements DataSource {
 	 */
 	@Override
 	public boolean isWrapperFor(Class<?> iface) throws SQLException {
-		return false;
+		return DataSource.class.equals(iface);
 	}
 
 	/**
@@ -232,7 +223,7 @@ public class JConnPool implements DataSource {
 	 */
 	@Override
 	public PrintWriter getLogWriter() throws SQLException {
-		return null;
+		throw new RuntimeException("Unsupport Operation.");
 	}
 
 	/**
@@ -257,7 +248,7 @@ public class JConnPool implements DataSource {
 	 */
 	@Override
 	public void setLogWriter(PrintWriter out) throws SQLException {
-
+		throw new RuntimeException("Unsupport Operation.");
 	}
 
 	/**
@@ -275,7 +266,7 @@ public class JConnPool implements DataSource {
 	 */
 	@Override
 	public void setLoginTimeout(int seconds) throws SQLException {
-
+		// todo 支持设置连接超时时间
 	}
 
 	/**
