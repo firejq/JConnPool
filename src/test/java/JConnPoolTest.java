@@ -13,7 +13,7 @@ public class JConnPoolTest {
 	@Test
 	public void testSomeLibraryMethod() throws ClassNotFoundException {
 		JConnPool jConnPool = new JConnPool();
-		String sql = "SELECT * FROM `db10_r` WHERE `id` = 2";
+		String sql = "SELECT * FROM `city` WHERE `id` = 2";
 		try {
 			Connection conn = jConnPool.getConnection();
 			PreparedStatement stmt = conn.prepareStatement(sql);
@@ -34,7 +34,7 @@ public class JConnPoolTest {
 	public void connTest() throws ClassNotFoundException {
 		String url = "jdbc:mysql://localhost:3306/keli_wincc?useSSL=true";
 		Class.forName("com.mysql.cj.jdbc.Driver");
-		String sql = "SELECT * FROM `db10_r` WHERE `id` IN (?, ?, ?)";
+		String sql = "SELECT * FROM `city` WHERE `id` IN (?, ?, ?)";
 
 		try (Connection conn = DriverManager.getConnection(url, "root", "root");
 			 PreparedStatement stmt = conn.prepareStatement(sql)) {
